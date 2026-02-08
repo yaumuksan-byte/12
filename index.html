@@ -1,6 +1,4 @@
 <!DOCTYPE html>
-
-
 <html lang="zh-CN">
 
 <head>
@@ -2057,61 +2055,34 @@
         }
     </style>
 
-    <style>
-        /* ═══════════════════ CSS性能优化 ═══════════════════ */
-        #game {
-            will-change: transform;
-        }
-
-        .stat-bar,
-        .hotbar-slot,
-        .inv-slot {
-            will-change: transform, opacity;
-        }
-
-        #minimap {
-            will-change: contents;
-        }
-
-        .toast {
-            will-change: transform, opacity;
-        }
-
-        /* 减少重绘 */
+    <style id="perf-optimization-styles">
+        /* ═══════════════════ Consolidated CSS Performance Optimizations ═══════════════════ */
+        
+        /* Containment: reduce layout/paint scope for interactive elements */
         .action-btn,
         .top-btn {
             contain: layout style;
         }
-
-        /* GPU加速 */
-        #joystick,
-        #joystick-thumb,
-        #crosshair {
-            transform: translateZ(0);
-            backface-visibility: hidden;
-        }
-    </style>
-
-
-    <style id="deep-optimization-styles-v3">
-        /* ═══════════════════ 深度CSS优化 v3 ═══════════════════ */
-        #game,
-        .stat-bar,
-        .hotbar-slot,
-        #minimap,
-        .action-btn {
-            transform: translateZ(0);
-            backface-visibility: hidden;
-        }
-
         .inv-slot,
         .craft-item,
         .toast {
             contain: layout style paint;
         }
+        #stats,
+        #hotbar,
+        .action-buttons {
+            contain: layout;
+        }
 
+        /* GPU compositing hints (only for elements that actually animate frequently) */
+        #joystick-thumb,
+        #crosshair {
+            transform: translateZ(0);
+            backface-visibility: hidden;
+        }
+
+        /* Respect user preference for reduced motion */
         @media (prefers-reduced-motion: reduce) {
-
             *,
             *::before,
             *::after {
@@ -2120,17 +2091,7 @@
             }
         }
 
-        .inv-grid,
-        .craft-grid {
-            will-change: scroll-position;
-        }
-
-        #stats,
-        #hotbar,
-        .action-buttons {
-            contain: layout;
-        }
-
+        /* Text rendering optimization */
         body {
             text-rendering: optimizeSpeed;
         }
@@ -2668,8 +2629,13 @@ class ParticlePool {
         }
     }
     spawn(x, y, vx, vy, color, size, life) {
-        let particle = this.pool.length > 0 ? this.pool.pop() : 
-                      (this.active.length > 0 ? this.active.shift() : null);
+        let particle = this.pool.length > 0 ? this.pool.pop() : null;
+        // If pool empty and at capacity, recycle oldest active particle (O(1) swap-remove)
+        if (!particle && this.active.length > 0) {
+            particle = this.active[0];
+            this.active[0] = this.active[this.active.length - 1];
+            this.active.length--;
+        }
         if (!particle) return null;
         particle.x = x; particle.y = y; particle.vx = vx; particle.vy = vy;
         particle.color = color; particle.size = size; particle.life = life;
@@ -2678,15 +2644,19 @@ class ParticlePool {
         return particle;
     }
     update(dt) {
-        for (let i = this.active.length - 1; i >= 0; i--) {
+        // Swap-remove dead particles instead of O(n) splice
+        let write = 0;
+        for (let i = 0; i < this.active.length; i++) {
             const p = this.active[i];
             p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
-            if (p.life <= 0) {
+            if (p.life > 0) {
+                this.active[write++] = p;
+            } else {
                 p.active = false;
-                this.active.splice(i, 1);
                 this.pool.push(p);
             }
         }
+        this.active.length = write;
     }
     render(ctx, camX, camY) {
         for (const p of this.active) {
@@ -2702,12 +2672,11 @@ window.TU.ParticlePool = ParticlePool;
 
 <script>
 /**
- * Performance Monitor - 性能监控
+ * Performance Monitor - delegates to PerfMonitor (defined later) to avoid duplication
  */
 window.PERF_MONITOR = {
-    frames: [], maxFrames: 60,
-    record(ft) { this.frames.push(ft); if (this.frames.length > this.maxFrames) this.frames.shift(); },
-    getAverageFPS() { return this.frames.length ? Math.round(1000 / (this.frames.reduce((a,b)=>a+b,0)/this.frames.length)) : 60; }
+    record(ft) { if (window.PerfMonitor) window.PerfMonitor.frame(performance.now()); },
+    getAverageFPS() { return window.PerfMonitor ? window.PerfMonitor.getAverageFPS() : 60; }
 };
 </script>
 <!-- ========================= END OPTIMIZED MODULES ========================= -->
@@ -3198,12 +3167,7 @@ window.PERF_MONITOR = {
                 }
                 
                 if (pool.length > 0) {
-                    const obj = pool.pop();
-                    // 清理对象引用以防止内存泄漏
-                    if (obj && typeof obj === 'object') {
-                        Object.keys(obj).forEach(key => { obj[key] = null; });
-                    }
-                    return obj;
+                    return pool.pop();
                 }
                 return factory();
             },
@@ -3274,35 +3238,29 @@ window.PERF_MONITOR = {
                 
                 if (this._pool.length > 0) {
                     const v = this._pool.pop();
-                    // 验证返回的对象
                     if (v && typeof v === 'object') {
-                        v.x = safeX; 
+                        v.x = safeX;
                         v.y = safeY;
+                        v._pooled = false; // mark as acquired
                         return v;
                     }
                 }
-                return { x: safeX, y: safeY };
+                return { x: safeX, y: safeY, _pooled: false };
             },
             
             release(v) {
                 // 严格验证
-                if (!v || typeof v !== 'object') {
-                    console.warn('[VecPool] Attempted to release non-object');
-                    return;
-                }
+                if (!v || typeof v !== 'object') return;
                 
-                // 防止重复释放同一对象
-                if (this._pool.includes(v)) {
-                    console.warn('[VecPool] Attempted double-release');
-                    return;
-                }
+                // 防止重复释放：use tag instead of O(n) includes()
+                if (v._pooled) return;
                 
                 this._releasedCount++;
                 
                 if (this._pool.length < this._maxSize) {
-                    // 清理引用
                     v.x = 0;
                     v.y = 0;
+                    v._pooled = true;
                     this._pool.push(v);
                 }
             },
@@ -3351,6 +3309,7 @@ window.PERF_MONITOR = {
                     const arr = pool.pop();
                     if (Array.isArray(arr)) {
                         arr.length = 0;
+                        arr._pooled = false; // mark as acquired
                         return arr;
                     }
                 }
@@ -3376,11 +3335,10 @@ window.PERF_MONITOR = {
                     this._typeCount++;
                 }
                 
-                if (pool.length < this.MAX_POOL_SIZE && !pool.includes(arr)) {
-                    // 深度清理数组元素
-                    for (let i = 0; i < arr.length; i++) {
-                        arr[i] = null;
-                    }
+                if (pool.length < this.MAX_POOL_SIZE) {
+                    // Tag-based double-release prevention (O(1) vs O(n) includes)
+                    if (arr._pooled) return;
+                    arr._pooled = true;
                     arr.length = 0;
                     pool.push(arr);
                 }
@@ -3703,29 +3661,23 @@ window.PERF_MONITOR = {
         window.PerfMonitor = PerfMonitor;
 
         // ═══════════════════ 纹理缓存优化 (防御性重构版) ═══════════════════
+        // TextureCache: O(1) LRU using Map iteration order (delete+re-insert)
         const TextureCache = {
-            _cache: new Map(),
-            _accessOrder: [],
+            _cache: new Map(),  // Map preserves insertion order; delete+set = move to end
             _maxSize: 200,
             _hitCount: 0,
             _missCount: 0,
 
             get(key) {
-                // 验证key
-                if (key === undefined || key === null) {
-                    console.warn('[TextureCache] Invalid key');
-                    return null;
-                }
+                if (key === undefined || key === null) return null;
                 
-                if (this._cache.has(key)) {
+                const val = this._cache.get(key);
+                if (val !== undefined) {
                     this._hitCount++;
-                    // 更新访问顺序
-                    const idx = this._accessOrder.indexOf(key);
-                    if (idx > -1) {
-                        this._accessOrder.splice(idx, 1);
-                        this._accessOrder.push(key);
-                    }
-                    return this._cache.get(key);
+                    // O(1) LRU update: delete and re-insert moves key to end
+                    this._cache.delete(key);
+                    this._cache.set(key, val);
+                    return val;
                 }
                 
                 this._missCount++;
@@ -3733,40 +3685,24 @@ window.PERF_MONITOR = {
             },
 
             set(key, value) {
-                // 验证key
-                if (key === undefined || key === null) {
-                    console.warn('[TextureCache] Invalid key for set');
-                    return;
-                }
+                if (key === undefined || key === null) return;
                 
-                // 更新已存在的key
+                // Update existing: delete first to refresh insertion order
                 if (this._cache.has(key)) {
+                    this._cache.delete(key);
                     this._cache.set(key, value);
-                    this._updateAccessOrder(key);
                     return;
                 }
 
-                // LRU淘汰
-                while (this._cache.size >= this._maxSize && this._accessOrder.length > 0) {
-                    const oldest = this._accessOrder.shift();
+                // LRU eviction: Map.keys().next() gives oldest entry in O(1)
+                while (this._cache.size >= this._maxSize) {
+                    const oldest = this._cache.keys().next().value;
                     const cached = this._cache.get(oldest);
-                    // 清理纹理引用
-                    if (cached && cached.src) {
-                        cached.src = '';
-                    }
+                    if (cached && cached.src) cached.src = '';
                     this._cache.delete(oldest);
                 }
 
                 this._cache.set(key, value);
-                this._accessOrder.push(key);
-            },
-            
-            _updateAccessOrder(key) {
-                const idx = this._accessOrder.indexOf(key);
-                if (idx > -1) {
-                    this._accessOrder.splice(idx, 1);
-                    this._accessOrder.push(key);
-                }
             },
             
             getStats() {
@@ -3781,12 +3717,10 @@ window.PERF_MONITOR = {
             },
 
             clear() {
-                // 清理所有纹理引用
                 this._cache.forEach(texture => {
                     if (texture && texture.src) texture.src = '';
                 });
                 this._cache.clear();
-                this._accessOrder.length = 0;
                 this._hitCount = 0;
                 this._missCount = 0;
             }
@@ -3867,21 +3801,8 @@ window.PERF_MONITOR = {
         };
         window.LazyLoader = LazyLoader;
 
-        // ═══════════════════ 全局错误处理 ═══════════════════
-        window.addEventListener('error', (e) => {
-            console.error('Game Error:', e.error);
-            // 尝试恢复游戏状态
-            try {
-                if (window.__GAME_INSTANCE__ && window.__GAME_INSTANCE__._rafRunning) {
-                    // 游戏仍在运行，记录错误但不中断
-                    console.warn('Game continues despite error');
-                }
-            } catch (e) { if (typeof console !== 'undefined' && console.debug) console.debug('[Debug] Silently caught:', e); }
-        });
-
-        window.addEventListener('unhandledrejection', (e) => {
-            console.error('Unhandled Promise Rejection:', e.reason);
-        });
+        // NOTE: Global error handlers already registered in TU_Defensive module (head).
+        // Removed duplicate handlers here to avoid double-logging.
 
         window.TU = window.TU || {};
     </script>
@@ -4091,27 +4012,25 @@ window.PERF_MONITOR = {
         // 旋转/尺寸变化时同步更新（节流到 rAF，避免 resize 连续触发导致重复计算）
         let __tuDeviceClassRaf = 0;
 
-        // ═══════════════════ 增强边界检查工具 ═══════════════════
-        const SafeAccess = {
-            getTile(world, x, y, defaultValue = BLOCK.AIR) {
+        // SafeAccess: delegate to TU_Defensive.WorldAccess (already defined in head)
+        // This avoids a duplicate definition while keeping the same API for existing callers
+        const SafeAccess = (window.TU_Defensive && window.TU_Defensive.WorldAccess) || {
+            getTile(world, x, y, defaultValue = 0) {
                 if (!world || !world.tiles) return defaultValue;
                 if (x < 0 || y < 0 || x >= world.w || y >= world.h) return defaultValue;
                 return world.tiles[x][y];
             },
-
             setTile(world, x, y, value) {
                 if (!world || !world.tiles) return false;
                 if (x < 0 || y < 0 || x >= world.w || y >= world.h) return false;
                 world.tiles[x][y] = value;
                 return true;
             },
-
             getLight(world, x, y, defaultValue = 0) {
                 if (!world || !world.light) return defaultValue;
                 if (x < 0 || y < 0 || x >= world.w || y >= world.h) return defaultValue;
                 return world.light[x][y];
             },
-
             setLight(world, x, y, value) {
                 if (!world || !world.light) return false;
                 if (x < 0 || y < 0 || x >= world.w || y >= world.h) return false;
@@ -9220,8 +9139,8 @@ window.PERF_MONITOR = {
                     if (tex) {
                         ctx.drawImage(tex, -item.w / 2, -item.h / 2, item.w, item.h);
                     } else {
-                        // 后备渲染
-                        ctx.fillStyle = bd?.color || '#fff';
+                        // 后备渲染 (fixed: bd was undefined, use BLOCK_COLOR lookup)
+                        ctx.fillStyle = BLOCK_COLOR[item.blockId] || '#fff';
                         ctx.fillRect(-item.w / 2, -item.h / 2, item.w, item.h);
                     }
 
@@ -24555,93 +24474,27 @@ function scheduleLogic(i) {
 
                             <script>
                                 /**
-                                 * Terraria Ultra - Final Optimization Patch v3 (Manus Edition)
-                                 * Focus: Rendering Batching, Zero-Allocation Input, and Worker Throughput.
+                                 * Runtime Optimization Patch (cleaned)
+                                 * - Renderer: skip near-black tiles
+                                 * - Removed duplicate TouchController.getInput (already zero-alloc in class)
+                                 * - Removed no-op TileLogicEngine wrapper
+                                 * - Removed unsafe game.loop wrapping (adaptive substeps handled in Game.loop itself)
                                  */
                                 (function () {
                                     'use strict';
 
-                                    // 1. Zero-Allocation Input Buffer
-                                    const inputBuffer = {
-                                        left: false, right: false, jump: false, sprint: false,
-                                        mouseX: 0, mouseY: 0, mouseLeft: false, mouseRight: false
-                                    };
-
-                                    if (typeof TouchController !== 'undefined') {
-                                        const originalGetInput = TouchController.prototype.getInput;
-                                        TouchController.prototype.getInput = function () {
-                                            // Re-use internal buffer instead of creating new objects
-                                            const o = this._input || (this._input = {});
-                                            o.left = this.joystick.dx < -0.3;
-                                            o.right = this.joystick.dx > 0.3;
-                                            o.jump = this.buttons.jump;
-                                            o.sprint = Math.abs(this.joystick.dx) > 0.85;
-                                            o.mine = this.buttons.mine;
-                                            o.place = this.buttons.place;
-                                            o.targetX = this.crosshair.x;
-                                            o.targetY = this.crosshair.y;
-                                            o.hasTarget = this.crosshair.visible;
-                                            return o;
-                                        };
-                                    }
-
-                                    // 2. Rendering Batching & Context Optimization
+                                    // Renderer: skip drawing tiles that are too dark to see
                                     if (typeof Renderer !== 'undefined') {
                                         const RP = Renderer.prototype;
-
-                                        // Optimize drawImage calls by checking visibility
                                         const originalDrawTile = RP.drawTile;
                                         if (originalDrawTile) {
                                             RP.drawTile = function (ctx, id, x, y, size, light) {
-                                                if (light <= 0.05) return; // Skip near-black tiles
+                                                if (light <= 0.05) return;
                                                 originalDrawTile.call(this, ctx, id, x, y, size, light);
                                             };
                                         }
-
-                                        // Cache common context states
-                                        RP._applyGlobalState = function (ctx) {
-                                            ctx.imageSmoothingEnabled = false;
-                                            ctx.textBaseline = 'top';
-                                        };
                                     }
-
-                                    // 3. Logic Engine Worker Throughput
-                                    if (typeof TileLogicEngine !== 'undefined') {
-                                        // Optimize the applyPending logic to handle larger batches
-                                        const originalApply = TileLogicEngine.prototype._applyPending;
-                                        if (originalApply) {
-                                            TileLogicEngine.prototype._applyPending = function (deadline) {
-                                                // Increase budget for high-end devices
-                                                const isHigh = this.game && this.game._perf && this.game._perf.level === 'high';
-                                                const maxOps = isHigh ? 5000 : 2000;
-                                                // ... implementation logic would go here, but we inject via prototype
-                                                return originalApply.call(this, deadline);
-                                            };
-                                        }
-                                    }
-
-                                    // 4. Global Performance Monitor & Auto-Scaling
-                                    window.addEventListener('load', () => {
-                                        if (window.__GAME_INSTANCE__) {
-                                            const game = window.__GAME_INSTANCE__;
-                                            console.log('Manus Optimization Patch Active');
-
-                                            // Inject a smarter FPS regulator
-                                            const originalLoop = game.loop;
-                                            game.loop = function (timestamp) {
-                                                // Adaptive step based on load
-                                                if (this.fps < 30) {
-                                                    this._maxSubSteps = 2; // Reduce logic catch-up to prevent spiral
-                                                } else {
-                                                    this._maxSubSteps = 5;
-                                                }
-                                                originalLoop.call(this, timestamp);
-                                            };
-                                        }
-                                    });
                                 })();
-
-
                                 </script>
 <script>
 (function () {
