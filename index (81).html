@@ -5557,7 +5557,7 @@ window.PERF_MONITOR = {
             [BLOCK.SANDSTONE]: { name: '砂岩', solid: true, transparent: false, light: 0, hardness: 2.5, color: '#D4A574' },
             [BLOCK.RED_SAND]: { name: '红沙', solid: true, transparent: false, light: 0, hardness: 0.8, color: '#C75B39' },
             [BLOCK.GRAVEL]: { name: '砾石', solid: true, transparent: false, light: 0, hardness: 1, color: '#757575' },
-            [BLOCK.LIMESTONE]: { name: '石灰 ite', solid: true, transparent: false, light: 0, hardness: 2, color: '#E8DCC4' },
+            [BLOCK.LIMESTONE]: { name: '石灰石', solid: true, transparent: false, light: 0, hardness: 2, color: '#E8DCC4' },
             [BLOCK.SLATE]: { name: '板岩', solid: true, transparent: false, light: 0, hardness: 3, color: '#546E7A' },
             [BLOCK.BASALT]: { name: '玄武岩', solid: true, transparent: false, light: 0, hardness: 4, color: '#37474F' },
             [BLOCK.FROZEN_STONE]: { name: '冻石', solid: true, transparent: true, light: 1, hardness: 3, color: '#B3E5FC' },
@@ -6070,11 +6070,6 @@ window.PERF_MONITOR = {
                         ctx.fillRect(10, 10, 3, 3);
                         break;
 
-                    case BLOCK.ORE_COPPER:
-                    case BLOCK.ORE_IRON:
-                    case BLOCK.ORE_SILVER:
-                    case BLOCK.ORE_GOLD:
-                    case BLOCK.ORE_DIAMOND:
                     case BLOCK.COPPER_ORE: case BLOCK.IRON_ORE: case BLOCK.SILVER_ORE:
                     case BLOCK.GOLD_ORE: case BLOCK.DIAMOND_ORE:
                         // 矿石：石头背景 + 宝石镶嵌
@@ -7260,11 +7255,11 @@ window.PERF_MONITOR = {
             _vegetation(tiles) {
                 for (let x = 5; x < this.w - 5; x++) {
                     const biome = this._biome(x);
-                    let groundY = 0;
+                    let groundY = -1;
                     for (let y = 0; y < this.h; y++) {
                         if (tiles[x][y] !== BLOCK.AIR) { groundY = y; break; }
                     }
-                    if (!groundY || groundY > this.h * 0.5) continue;
+                    if (groundY < 0 || groundY > this.h * 0.5) continue;
 
                     // 各种树木
                     this._placeTree(tiles, x, groundY, biome);
@@ -7544,11 +7539,11 @@ window.PERF_MONITOR = {
             }
 
             _placeHouse(tiles, walls, x) {
-                let groundY = 0;
+                let groundY = -1;
                 for (let y = 0; y < this.h; y++) {
                     if (tiles[x][y] !== BLOCK.AIR) { groundY = y; break; }
                 }
-                if (!groundY || groundY > this.h * 0.4) return;
+                if (groundY < 0 || groundY > this.h * 0.4) return;
 
                 const w = 8 + Math.floor(Math.random() * 4);
                 const h = 6 + Math.floor(Math.random() * 3);
@@ -7614,11 +7609,11 @@ window.PERF_MONITOR = {
             }
 
             _placeMineEntrance(tiles, walls, x) {
-                let groundY = 0;
+                let groundY = -1;
                 for (let y = 0; y < this.h; y++) {
                     if (tiles[x][y] !== BLOCK.AIR) { groundY = y; break; }
                 }
-                if (!groundY) return;
+                if (groundY < 0) return;
 
                 // 矿井入口框架
                 const entranceW = 4;
@@ -7791,11 +7786,11 @@ window.PERF_MONITOR = {
             }
 
             _createMeteoriteCrater(tiles, cx) {
-                let groundY = 0;
+                let groundY = -1;
                 for (let y = 0; y < this.h; y++) {
                     if (tiles[cx][y] !== BLOCK.AIR) { groundY = y; break; }
                 }
-                if (!groundY) return;
+                if (groundY < 0) return;
 
                 const craterRadius = 8 + Math.floor(Math.random() * 6);
 
@@ -7894,11 +7889,11 @@ window.PERF_MONITOR = {
             }
 
             _createLivingTree(tiles, walls, cx) {
-                let groundY = 0;
+                let groundY = -1;
                 for (let y = 0; y < this.h; y++) {
                     if (tiles[cx][y] !== BLOCK.AIR) { groundY = y; break; }
                 }
-                if (!groundY || groundY > this.h * 0.4) return;
+                if (groundY < 0 || groundY > this.h * 0.4) return;
 
                 const trunkWidth = 4 + Math.floor(Math.random() * 3);
                 const trunkHeight = 25 + Math.floor(Math.random() * 20);
@@ -7976,11 +7971,11 @@ window.PERF_MONITOR = {
                     if (biome !== 'desert' && biome !== 'red_desert') continue;
                     if (Math.random() > 0.4) continue;
 
-                    let groundY = 0;
+                    let groundY = -1;
                     for (let y = 0; y < this.h; y++) {
                         if (tiles[x][y] !== BLOCK.AIR) { groundY = y; break; }
                     }
-                    if (!groundY) continue;
+                    if (groundY < 0) continue;
 
                     const pyramidW = 30 + Math.floor(Math.random() * 20);
                     const pyramidH = Math.floor(pyramidW * 0.6);
@@ -8346,6 +8341,8 @@ window.PERF_MONITOR = {
                         } else if (herb.hell) {
                             startY = Math.floor(this.h * 0.9);
                             endY = this.h - 5;
+                        } else {
+                            continue; // skip herbs with no valid depth range
                         }
 
                         for (let y = startY; y < endY; y++) {
@@ -9221,7 +9218,7 @@ window.PERF_MONITOR = {
                         ctx.drawImage(tex, -item.w / 2, -item.h / 2, item.w, item.h);
                     } else {
                         // 后备渲染
-                        ctx.fillStyle = bd?.color || '#fff';
+                        ctx.fillStyle = (BLOCK_DATA[item.blockId] && BLOCK_DATA[item.blockId].color) || '#fff';
                         ctx.fillRect(-item.w / 2, -item.h / 2, item.w, item.h);
                     }
 
